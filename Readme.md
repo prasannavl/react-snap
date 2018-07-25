@@ -1,4 +1,4 @@
-# react-snap [![npm](https://img.shields.io/npm/v/react-snap.svg)](https://www.npmjs.com/package/react-snap) ![npm](https://img.shields.io/npm/dt/react-snap.svg) [![Twitter Follow](https://img.shields.io/twitter/url/http/shields.io.svg?style=social&label=Follow)](https://twitter.com/stereobooster)
+# react-snap [![Build Status](https://travis-ci.org/stereobooster/react-snap.svg?branch=master)](https://travis-ci.org/stereobooster/react-snap) [![npm](https://img.shields.io/npm/v/react-snap.svg)](https://www.npmjs.com/package/react-snap) ![npm](https://img.shields.io/npm/dt/react-snap.svg) [![Twitter Follow](https://img.shields.io/twitter/url/http/shields.io.svg?style=social&label=Follow)](https://twitter.com/stereobooster)
 
 Pre-renders web app into static HTML. Uses headless chrome to crawl all available links starting from the root. Heavily inspired by [prep](https://github.com/graphcool/prep) and [react-snapshot](https://github.com/geelen/react-snapshot), but written from scratch. Uses best practices to get best loading performance.
 
@@ -46,7 +46,6 @@ That's it!
 
 ## Basic usage with Vue.js
 
-
 Install:
 
 ```sh
@@ -60,11 +59,17 @@ Change `package.json`:
   "postbuild": "react-snap"
 },
 "reactSnap": {
-  "source": "dist"
+  "source": "dist",
+  "minifyHtml": {
+    "collapseWhitespace": false, // or use preserveWhitespace: false in vue-loader
+    "removeComments": false
+  }
 }
 ```
 
 `source` - output folder of webpack or any other bundler of your choice
+
+Read more about `minifyHtml` caveats in [#142](https://github.com/stereobooster/react-snap/issues/142).
 
 Example: [Switch from prerender-spa-plugin to react-snap](https://github.com/stereobooster/prerender-spa-plugin/commit/ee73d39b862bc905b44a04c6eaa58e6730957819)
 
@@ -146,8 +151,7 @@ It is not a problem to render async component with react-snap, tricky part happe
 `react-loadable` and `loadable-components` solve this issue for SSR. But only `loadable-components` can solve this issue for "snapshot" setup:
 
 ```js
-import { loadComponents } from "loadable-components";
-import { getState } from "loadable-components";
+import { loadComponents, getState } from "loadable-components";
 window.snapSaveState = () => getState();
 
 loadComponents().then(() => {
@@ -189,7 +193,9 @@ You can block all third-party requests with the following config
 
 `react-snap` can capture all AJAX requests. It will store `json` request to the same domain in `window.snapStore[<path>]`, where `<path>` is the path of json request.
 
-Use `cacheAjaxRequests: true` to enable this feature.
+Use `"cacheAjaxRequests": true` to enable this feature.
+
+This feature can conflict with browser cache see [#197](https://github.com/stereobooster/react-snap/issues/197#issuecomment-397893434) for details. You may want to disable cache in this case - `"puppeteer": { "cache": false }`.
 
 ### Service Workers
 

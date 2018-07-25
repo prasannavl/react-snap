@@ -1,7 +1,6 @@
 const puppeteer = require("puppeteer");
 const _ = require("highland");
 const url = require("url");
-// @ts-ignore
 const mapStackTrace = require("sourcemapped-stacktrace-node").default;
 const path = require("path");
 const fs = require("fs");
@@ -29,28 +28,37 @@ const skipThirdPartyRequests = async opt => {
  */
 const enableLogging = opt => {
   const { page, options, route, onError, sourcemapStore } = opt;
-  page.on("console", msg => console.log(`✏️  ${route} log:`, msg.text()));
+  page.on("console", msg =>
+    Promise.all(msg.args().map(x => x.jsonValue())).then(args =>
+      console.log(`✏️  ${route} log:`, ...args)
+    )
+  );
   page.on("error", msg => {
     console.log(`🔥  ${route} error:`, msg);
     onError && onError();
   });
   page.on("pageerror", e => {
     if (options.sourceMaps) {
-      mapStackTrace(e.stack, {
+      mapStackTrace(e.stack || e.message, {
         isChromeOrEdge: true,
         store: sourcemapStore || {}
-      }).then(result => {
-        // TODO: refactor mapStackTrace: return array not a string, return first row too
-        const stackRows = result.split("\n");
-        const puppeteerLine =
-          stackRows.findIndex(x => x.includes("puppeteer")) ||
-          stackRows.length - 1;
+      })
+        .then(result => {
+          // TODO: refactor mapStackTrace: return array not a string, return first row too
+          const stackRows = result.split("\n");
+          const puppeteerLine =
+            stackRows.findIndex(x => x.includes("puppeteer")) ||
+            stackRows.length - 1;
 
-        console.log(
-          `🔥  ${route} pageerror: ${e.stack.split("\n")[0] +
-            "\n"}${stackRows.slice(0, puppeteerLine).join("\n")}`
-        );
-      });
+          console.log(
+            `🔥  ${route} pageerror: ${(e.stack || e.message).split("\n")[0] +
+              "\n"}${stackRows.slice(0, puppeteerLine).join("\n")}`
+          );
+        })
+        .catch(e2 => {
+          console.log(`🔥  ${route} pageerror:`, e);
+          console.log(`️️️⚠️  ${route} error in Source Maps:`, e2.message);
+        });
     } else {
       console.log(`🔥  ${route} pageerror:`, e);
     }
@@ -58,7 +66,11 @@ const enableLogging = opt => {
   });
   page.on("response", response => {
     if (response.status() >= 400) {
-      console.log(`⚠️   ${response.status()} error: ${response.url()}`);
+      let route = ''
+      try {
+        route = response._request.headers().referer.replace(`http://localhost:${options.port}`, "");
+      } catch (e) {}
+      console.log(`⚠️   ${route} ${response.status()} error: ${response.url()}`);
     }
   });
   // page.on("requestfailed", msg =>
@@ -100,9 +112,8 @@ const crawl = async opt => {
   } = opt;
   let shuttingDown = false;
   let streamClosed = false;
-  // TODO: this doesn't work as expected
-  // process.stdin.resume();
-  process.on("SIGINT", () => {
+
+  const onSigint = () => {
     if (shuttingDown) {
       process.exit(1);
     } else {
@@ -111,7 +122,14 @@ const crawl = async opt => {
         "\nGracefully shutting down. To exit immediately, press ^C again"
       );
     }
-  });
+  };
+  process.on("SIGINT", onSigint);
+
+  const onUnhandledRejection = error => {
+    console.log("UnhandledPromiseRejectionWarning", error);
+    shuttingDown = true;
+  };
+  process.on("unhandledRejection", onUnhandledRejection);
 
   const queue = _();
   let enqued = 0;
@@ -163,6 +181,7 @@ const crawl = async opt => {
     if (!shuttingDown && !skipExistingFile) {
       try {
         const page = await browser.newPage();
+        await page.setCacheEnabled(options.puppeteer.cache);
         if (options.viewport) await page.setViewport(options.viewport);
         if (options.skipThirdPartyRequests)
           await skipThirdPartyRequests({ page, options, basePath });
@@ -207,14 +226,19 @@ const crawl = async opt => {
     options.include.map(x => addToQueue(`${basePath}${x}`));
   }
 
-  queue
-    .map(x => _(fetchPage(x)))
-    .mergeWithLimit(options.concurrency)
-    .toArray(async function() {
-      await browser.close();
-      onEnd && onEnd();
-      if (shuttingDown) process.exit(1);
-    });
+  return new Promise((resolve, reject) => {
+    queue
+      .map(x => _(fetchPage(x)))
+      .mergeWithLimit(options.concurrency)
+      .toArray(async () => {
+        process.removeListener("SIGINT", onSigint);
+        process.removeListener("unhandledRejection", onUnhandledRejection);
+        await browser.close();
+        onEnd && onEnd();
+        if (shuttingDown) return reject("");
+        resolve();
+      });
+  });
 };
 
 exports.skipThirdPartyRequests = skipThirdPartyRequests;
